@@ -1,0 +1,52 @@
+name: 'Destroy NodeBoot Starter Website'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  destroy:
+    name: 'Destroy'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init and Get Outputs
+        id: terraform
+        run: |
+          cd terraform
+          terraform init
+          # Fetch the S3 bucket name as an output
+          echo "S3_BUCKET_NAME=$(terraform output -json s3_bucket_name | jq -r .)" >> $GITHUB_ENV
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+
+      - name: Delete S3 Bucket Content
+        run: |
+          aws s3api list-object-versions --bucket $S3_BUCKET_NAME --output json --query "Versions[].{Key:Key,VersionId:VersionId}" | \
+          jq -r '.[] | "aws s3api delete-object --bucket $S3_BUCKET_NAME --key \(.Key) --version-id \(.VersionId)"' | \
+          sh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+          S3_BUCKET_NAME: ${{ env.S3_BUCKET_NAME }}
+
+      - name: Destroy Resources
+        id: destroy_resources
+        run: |
+          cd terraform
+          terraform destroy -auto-approve -input=false
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+

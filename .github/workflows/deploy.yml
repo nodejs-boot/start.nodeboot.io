@@ -1,0 +1,66 @@
+name: 'Deploy NodeBoot Starter Website'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: 'Deploy'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init and Apply
+        id: terraform
+        run: |
+          cd terraform
+          terraform init
+          terraform apply -auto-approve -input=false
+          echo "CLOUD_FRONT_ID=$(terraform output -json cloudfront_distribution_id  | jq -r .)" >> $GITHUB_ENV
+          echo "S3_BUCKET_NAME=$(terraform output -json s3_bucket_name | jq -r .)" >> $GITHUB_ENV
+          cd ..
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --force --frozen-lockfile
+
+      - name: Build React App
+        run:  npm run build
+
+      - name: Sync S3 Bucket
+        run: |
+          aws s3 sync ./build/ s3://$S3_BUCKET_NAME --delete --cache-control "max-age=31536000,public" --exclude "index.html"
+          aws s3 cp ./build/index.html s3://$S3_BUCKET_NAME/index.html --cache-control "no-cache" --content-type "text/html"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+          S3_BUCKET_NAME: ${{ env.S3_BUCKET_NAME }}
+
+      - name: Invalidate CloudFront Cache
+        id: invalidate
+        run: |
+          aws cloudfront create-invalidation --distribution-id $CLOUD_FRONT_ID --paths /*
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: eu-central-1
+          CLOUD_FRONT_ID: ${{ env.CLOUD_FRONT_ID }}
